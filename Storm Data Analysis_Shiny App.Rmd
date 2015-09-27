@@ -1,0 +1,434 @@
+---
+title: "Storm Data Analysis Shiny App"
+author: "Lakshmanan Arasakumar"
+---
+
+###Synopsis
+Goal of this report is to idenify severe weather events of the highest impact on both US population and US economy based on the information retrieved from U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. According to official documentation NOAA storm database sources include
+
+county, state and federal emergency management officials,local law enforcement officials, skywarn spotters, NWS damage surveys, newspaper clipping services, the insurance industry and the general public.
+
+Database version used for this report contain entries for years 1950-2011
+
+###Data processing
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+library(reshape)
+```
+
+###Loading dataset and initital transofrmations
+
+Dataset has been decompressed and loaded into data.frame and after that convered into data.table. Resulting data.table contained 436108 rows and 38.
+```{r}
+setwd("~/Workspace/coursera/reproducible_research/RepData_PeerAssessment2/")
+dt <- data.table(read.csv(bzfile("StormData.csv.bz2")))
+str(dt)
+```
+
+To simplify further aggregations dataset has been extended with following column:
+
+COUNT column with value 1
+YEAR year of the event extract from event BGN_DATE
+
+```{r}
+dt$COUNT <- 1
+dt$YEAR <- year(strptime(dt$BGN_DATE, "%m/%d/%Y %H:%M:%S"))
+```
+
+###Processing PROPDMGEXP and CROPDMGEXP.
+
+Based on the provided documentation and a relevant discussion on the Coursera forum I decided to interpret provided data as an expotent for PROPDMG and CROPDMG respectively.
+
+```{r }
+levels(dt$PROPDMGEXP)
+levels(dt$CROPDMGEXP)
+fixexp <- function(x) {
+    return(as.numeric(ifelse(x == "", 0, ifelse(x == "K", "3", ifelse(x == "M", 
+        "6", ifelse(x == "B", "9", ifelse(x %in% c("", "-", "?", "+", "0", "H"), 
+            NA, as.character(x))))))))
+}
+
+dt$PROPDMGEXP <- fixexp(toupper(dt$PROPDMGEXP))
+dt$CROPDMGEXP <- fixexp(toupper(dt$CROPDMGEXP))
+
+dt$PROPDMG.TOTAL <- (dt$PROPDMG * 10^dt$PROPDMGEXP)/1e+06
+dt$CROPDMG.TOTAL <- (dt$CROPDMG * 10^dt$CROPDMGEXP)/1e+06
+```
+There is large number of entries where result of above computation does not much value which can be found in the recodrd description. For the purpose of this I dedcided to leave these intacted with one exception
+
+```{r}
+dt[which.max(dt$PROPDMG.TOTAL)]
+dt[YEAR == 2006 & REFNUM == 605943]$PROPDMG.TOTAL = 70
+
+```
+
+###Cleaning and categorizing event types
+Due to lack of standarized vocabulary and as result of muliple typographical errors dataset of interest contains large number of unique envent labels. To obtain meaningful results I decided to reduce number of events labels by fixing obvious errors and introducing classification based on National Weather Service Instruction.
+
+```{r}
+length(unique(dt$EVTYPE))
+dt$EVTYPE <- toupper(gsub("(^\\s*)|(\\s*$)|((?<=\\s)\\s+)", "", dt$EVTYPE, perl = T))
+```
+
+At the beginning I removed leading, trailing and repeated whitspaces from events labels.
+
+Excluding long-term events, summary rows and entries which cannot be easly attributed to the weather events.
+Events corresponding to summary fields and isolated events or ambiguous have been removed.
+
+```{r}
+length(unique(dt$EVTYPE))
+# Remove summary rows
+exclude.list <- c("NONE", "?", "OTHER", "MARINE ACCIDENT", "WET MONTH", "WET YEAR", 
+    "APACHE COUNTY", "NO SEVERE WEATHER", "MONTHLY PRECIPITATION", "UNSEASONABLY WARM YEAR", 
+    "DROWNING", "SOUTHEAST", "EXCESSIVE", "HIGH", "MILD PATTERN", "NORTHERN LIGHTS", 
+    "RECORD TEMPERATURES", "RECORD TEMPERATURE", "SEVERE TURBULENCE", "MONTHLY TEMPERATURE", 
+    "TEMPERATURE RECORD")
+dt <- dt[!grepl("(^SUMMARY)|(SUMMARY$)", EVTYPE) & !EVTYPE %in% exclude.list, 
+    ]
+length(unique(dt$EVTYPE))
+
+```
+
+###Combining labels based on term similarity
+
+Reamaining labels have been replaced with general terms inspired by National Weather Service Instruction classification using set of regular expressions. Detailed mapping and number of removed entries at each step can be found below.
+
+####Combining thunderstorm realated entries
+
+```{r}
+thuderstorm.pattern <- "^(THUN?D?EE?RE?STORM)|(TSTMW)|(TSTM)|(THUNDERSTORMW)|(THUNDERTORM)|(THUNDERTSORM)|(THUNDERSTROM)|(TUNDERSTORM)|(SEVERE THUNDERSTORM)|(GUSTNADO)|(GUSTY THUNDERSTORM WINDS)|(^GUSTY THUNDERSTORM WIND$)|(^THUNDESTORM WINDS$)|(MICR?OBURST)|(^DOWNBURST)"
+grep(thuderstorm.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(thuderstorm.pattern, EVTYPE), ]$EVTYPE <- "THUNDERSTORM / THUNDERSTORM WIND"
+length(unique(dt$EVTYPE))
+```
+
+####Combining hail realated entries
+```{r}
+hail.pattern <- "HAIL"
+grep(hail.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(hail.pattern, EVTYPE), ]$EVTYPE <- "HAIL"
+length(unique(dt$EVTYPE))
+```
+
+####Combining ornado realated entries
+
+```{r}
+tornado.pattern <- "(TORNADO)|(TORNDAO)|(WAY?TER\\s?SPOUT)|(FUNNEL)|(LANDSPOUT)|(WHIRLWIND)"
+grep(tornado.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(tornado.pattern, EVTYPE), ]$EVTYPE <- "TORNADO"
+length(unique(dt$EVTYPE))
+```
+
+####Combining wildfire realated entries
+```{r}
+wildfire.pattern <- "(^((BRUSH)|(WILD)|(FOREST)|(GRASS)).*FIRES?$)|(^RED FLAG CRITERIA)|(^RED FLAG FIRE WX)"
+grep(wildfire.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(wildfire.pattern, EVTYPE), ]$EVTYPE <- "WILDFIRE"
+length(unique(dt$EVTYPE))
+```
+
+####Combining surge realated entries
+```{r}
+surge.pattern <- "SURGE"
+grep(surge.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(surge.pattern, EVTYPE), ]$EVTYPE <- "SURGE"
+length(unique(dt$EVTYPE))
+```
+####Similarly combining everything else
+
+```{r, results='hide'}
+flash.flood.pattern <- "(FLASH.*FLOOD)|(FLOOD.*FLASH)|(^FLASH FLOOODING)"
+grep(flash.flood.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(flash.flood.pattern, EVTYPE), ]$EVTYPE <- "FLASH FLOOD"
+length(unique(dt$EVTYPE))
+coastal.flood.pattern <- "((COASTAL)|(CSTL)|(TIDAL)|(BEACH)).*((EROSION)|(FLOOD))|(ASTRONOMICAL.*TIDE)|(^HIGH TIDE)|(^BEACH EROSIN)|(^RAPIDLY RISING WATER)|(^RAPIDLY RISING WATER)|(^BLOW-OUT TIDE)"
+grep(coastal.flood.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(coastal.flood.pattern, EVTYPE), ]$EVTYPE <- "COASTAL FLOOD OR EROSION / TIDE"
+length(unique(dt$EVTYPE))
+other.flood.pattern <- "(^FLOOD((S)|(ING))?$)|(^LAKE(SHORE)? FLOOD$)|(^(ICE JAM)|(SNOWMELT)|(MAJOR)|(MINOR)|(RIVER( AND STREAM )?)|(RURAL) FLOOD(ING)?$)|(^FLOOD & HEAVY RAIN$)|(^HIGH WATER$)|(^SMA?L?L STREAM)|(^LOCAL FLOOD)|(^HIGHWAY FLOODING)|(^FLOOD WATCH)|(^BREAKUP FLOODING)|(^STREAM FLOODING)|(URBAN)|(^STREET FLOOD)"
+grep(other.flood.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(other.flood.pattern, EVTYPE), ]$EVTYPE <- "FLOOD"
+length(unique(dt$EVTYPE))
+tropical.strom.pattern <- "(TROPICAL STORM)|(HURRICANE)|(TYPHOON)|(TROPICAL DEPRESSION)|(^REMNANTS OF FLOYD)"
+grep(tropical.strom.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(tropical.strom.pattern, EVTYPE), ]$EVTYPE <- "TROPICAL STORM / HURRICANE / TYPHOON"
+length(unique(dt$EVTYPE))
+ice.and.snow.pattern <- "(SNOW)|(ICE)|(GLAZE)|(FREEZING DRIZZLE)|(FREEZE)|(FROST)|(HEAVY MIX)|(SLEET)|(ICY ROADS)|(MIXED PRECIPITATION)|(^MIXED PRECIP)|(^FREEZING SPRAY)"
+print(grep(ice.and.snow.pattern, sort(unique(dt$EVTYPE)), value = T))
+dt[grepl(ice.and.snow.pattern, EVTYPE), ]$EVTYPE <- "ICE / SNOW / FROST"
+length(unique(dt$EVTYPE))
+dust.storm.pattern <- "DUST"
+grep(dust.storm.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(dust.storm.pattern, EVTYPE), ]$EVTYPE <- "DUST STORM / DEVIL"
+length(unique(dt$EVTYPE))
+cold.pattern <- "(COLD)|(CHILL)|(COOL)|(LOW TEMPERATURE)|(HYPOTHERMIA)|(^UNSEASONAL LOW TEMP)|(^RECORD LOW$)"
+grep(cold.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(cold.pattern, EVTYPE), ]$EVTYPE <- "COLD AND WINDCHILL"
+length(unique(dt$EVTYPE))
+wind.pattern <- "(((GRADIENT)|(HIGH)|(GUSTY)|(STRONG)) WIND)|(^WINDS?$)|(^NON-SEVERE WIND DAMAGE$)|(^WIND DAMAGE$)|(^STORM FORCE WINDS$)|(^WND$)|(^WIND GUSTS)|(^WIND ADVISORY)|(^WIND STORM)|(^GUSTY LAKE WIND)|(^WAKE LOW WIND)"
+grep(wind.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(wind.pattern, EVTYPE), ]$EVTYPE <- "WIND"
+length(unique(dt$EVTYPE))
+rain.pattern <- "(RAIN)|(HEAVY PRECIPITATION)|(HEAVY SHOWER)|(^METRO STORM, MAY 26)|(^HEAVY PRECIPATATION)|(^UNSEASONABLY WET)|(^EXCESSIVE PRECIPITATION)|(^NORMAL PRECIPITATION)|(^WET WEATHER)|(^EXCESSIVE WETNESS)|(^EXTREMELY WET)|(^RECORD PRECIPITATION)|(ABNORMALLY WET)"
+grep(rain.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(rain.pattern, EVTYPE), ]$EVTYPE <- "RAIN OR WET"
+length(unique(dt$EVTYPE))
+land.slide.pattern <- "(MUD\\s?SLIDE)|(ROCK SLIDE)|(LANDSLUMP)|(LANDSLIDES?)"
+grep(land.slide.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(land.slide.pattern, EVTYPE), ]$EVTYPE <- "LANDSLIDE / MUDSLIDE / ROCK SLIDE"
+length(unique(dt$EVTYPE))
+lightning.pattern <- "(LIGHTNING)|(LIGHTING)|(LIGNTNING)"
+grep(lightning.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(lightning.pattern, EVTYPE), ]$EVTYPE <- "LIGHTNING"
+length(unique(dt$EVTYPE))
+fog.pattern <- "FOG"
+grep(fog.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(fog.pattern, EVTYPE), ]$EVTYPE <- "FOG"
+length(unique(dt$EVTYPE))
+blizzard.pattern <- "(BLIZZARD)|(WINTER STORM)"
+grep(blizzard.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(blizzard.pattern, EVTYPE), ]$EVTYPE <- "BLIZZARD / WINTER STORM"
+length(unique(dt$EVTYPE))
+winter.pattern <- "(WINTER WEATHER)|(WINTRY MIX)|(^WINTER MIX)|(^WINTERY MIX)"
+grep(winter.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(winter.pattern, EVTYPE), ]$EVTYPE <- "WINTER WEATHER"
+length(unique(dt$EVTYPE))
+heat.pattern <- "(HEAT)|(RECORD WARMTH)|(HOT)|(WARM)|(^RECORD HIGH)|(HYPERTHERMIA)|(HIGH TEMPERATURE RECORD)"
+grep(heat.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(heat.pattern, EVTYPE), ]$EVTYPE <- "HEAT"
+length(unique(dt$EVTYPE))
+dry.pattern <- "(DROUGHT)|(DRY)|(DRIEST)|(^BELOW NORMAL PRECIPITATION)"
+grep(dry.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(dry.pattern, EVTYPE), ]$EVTYPE <- "DROUGHT"
+length(unique(dt$EVTYPE))
+volcanic.pattern <- "(VOLCANIC ((ASH)|(ERUPTION)))"
+grep(volcanic.pattern, sort(unique(dt$EVTYPE)), value = T)
+
+dt[grepl(volcanic.pattern, EVTYPE), ]$EVTYPE <- "VOLCANIC ACTIVITY"
+length(unique(dt$EVTYPE))
+marine.pattern <- "(HIGH SEAS)|(SURF)|(RIP CURRENT)|(SWELLS)|(MARINE)|(HEAVY SEAS)|(^ROUGH SEAS)|(^HIGH WAVES)|(^WIND AND WAVE)|(^ROGUE WAVE)|(HIGH SURF)|(SEICHE)"
+grep(marine.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(marine.pattern, EVTYPE), ]$EVTYPE <- "MARINE WIND / SWELL / SURF"
+length(unique(dt$EVTYPE))
+vog.and.smoke.pattern <- "(VOG)|(SMOKE)"
+grep(vog.and.smoke.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(vog.and.smoke.pattern, EVTYPE), ]$EVTYPE <- "VOG / SMOKE"
+length(unique(dt$EVTYPE))
+avalanche.pattern <- "(AVALANCH?E)"
+grep(avalanche.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(avalanche.pattern, EVTYPE), ]$EVTYPE <- "AVALANCHE"
+length(unique(dt$EVTYPE))
+dam.pattern <- "(DAM)"
+grep(dam.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(dam.pattern, EVTYPE), ]$EVTYPE <- "DAM FAILURE"
+length(unique(dt$EVTYPE))
+coastalstorm.pattern <- "(COASTAL\\s?STORM)"
+grep(coastalstorm.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(coastalstorm.pattern, EVTYPE), ]$EVTYPE <- "COASTAL STORM"
+length(unique(dt$EVTYPE))
+wallcloud.pattern <- "(WALL CLOUD)"
+grep(wallcloud.pattern, sort(unique(dt$EVTYPE)), value = T)
+dt[grepl(wallcloud.pattern, EVTYPE), ]$EVTYPE <- "WALL CLOUD"
+length(unique(dt$EVTYPE))
+
+```
+
+
+```{r}
+print(paste("After initial data processing number of records have been reduced to", 
+    dim(dt)[1], "assigned to", length(unique(dt$EVTYPE)), "categories"))
+```
+
+###Data aggregation
+
+Cleaned dataset has been aggregated by year to obtain insight about general trends in number of reported events, number of affected people and amount of property damage.
+
+```{r}
+number.of.events.by.year <- dt[, list(COUNT = sum(COUNT)), by = list(YEAR)]
+
+population.damage.by.year <- rbind(dt[, list(total = sum(FATALITIES, na.rm = TRUE), 
+    category = "fatalities"), by = list(YEAR)], dt[, list(total = sum(INJURIES, 
+    na.rm = TRUE), category = "injuries"), by = list(YEAR)])
+
+population.damage.by.year$category <- factor(population.damage.by.year$category, 
+    labels = c("Fatalities", "Injuries"))
+
+property.and.crop.damage.by.year <- rbind(dt[, list(total = sum(CROPDMG.TOTAL, 
+    na.rm = TRUE), category = "cropdmg"), by = list(YEAR)], dt[, list(total = sum(PROPDMG.TOTAL, 
+    na.rm = TRUE), category = "propdmg"), by = list(YEAR)])
+
+property.and.crop.damage.by.year$category <- factor(property.and.crop.damage.by.year$category, 
+    labels = c("Crops damage", "Property damage"))
+
+
+plot.number.of.events.by.year <- ggplot(number.of.events.by.year, aes(x = YEAR, 
+    y = COUNT)) + geom_point(size = 3, colour = "red") + geom_line(linetype = "dashed")
+plot.number.of.events.by.year <- plot.number.of.events.by.year + geom_vline(xintercept = 1993, 
+    linetype = "dotted", colour = "black", size = 1.5)
+plot.number.of.events.by.year <- plot.number.of.events.by.year + scale_x_continuous(breaks = c(seq(1950, 
+    1990, 10), 1993, 2000, 2010)) + theme_bw()
+plot.number.of.events.by.year <- plot.number.of.events.by.year + labs(x = "Year", 
+    y = "Events", title = "Number of reports")
+
+plot.property.and.crop.damage.by.year <- ggplot(property.and.crop.damage.by.year, 
+    aes(x = YEAR, y = total, fill = category)) + geom_area(position = "stack")
+plot.property.and.crop.damage.by.year <- plot.property.and.crop.damage.by.year + 
+    geom_vline(xintercept = 1993, linetype = "dotted", colour = "black", size = 1.5)
+plot.property.and.crop.damage.by.year <- plot.property.and.crop.damage.by.year + 
+    scale_x_continuous(breaks = c(seq(1950, 1990, 10), 1993, 2000, 2010))
+plot.property.and.crop.damage.by.year <- plot.property.and.crop.damage.by.year + 
+    scale_fill_manual(values = c("#e6ab02", "#1b9e77")) + theme_bw() + theme(legend.justification = c(0, 
+    0), legend.position = c(0, 0.5))
+plot.property.and.crop.damage.by.year <- plot.property.and.crop.damage.by.year + 
+    labs(x = "Year", y = "Total damage (Million USD)", title = "Economic consequences")
+
+plot.population.damage.by.year <- ggplot(population.damage.by.year, aes(x = YEAR, 
+    y = total, fill = category)) + geom_area(position = "stack")
+plot.population.damage.by.year <- plot.population.damage.by.year + geom_vline(xintercept = 1993, 
+    linetype = "dotted", colour = "black", size = 1.5)
+plot.population.damage.by.year <- plot.population.damage.by.year + scale_x_continuous(breaks = c(seq(1950, 
+    1990, 10), 1993, 2000, 2010))
+plot.population.damage.by.year <- plot.population.damage.by.year + scale_fill_manual(values = c("#d95f02", 
+    "#7570b3")) + theme_bw() + theme(legend.justification = c(0, 0), legend.position = c(0, 
+    0.5))
+plot.population.damage.by.year <- plot.population.damage.by.year + labs(x = "Year", 
+    y = "Number of killed or injured", title = "Population impact")
+
+grid.arrange(plot.property.and.crop.damage.by.year, plot.population.damage.by.year, 
+    plot.number.of.events.by.year, main = "Impact of the severe weather events on US economy and population by year", 
+    sub = textGrob("Figure 1. General trends in the NOAA storm database showing difference between pre and post 1993 data", 
+        gp = gpar(font = 0.7)))
+
+```
+
+As we can see there is substantial difference between data collected before and after 1993. We can suspect that main reason is a change in methods of collecting data. Since we are interested in the results which can applied to the current situation I decided to keep only the data collected after 1992.
+
+```{r}
+print(paste("It contains", dim(dt[YEAR >= 1993])[1], "records assigned to", 
+    length(unique(dt[YEAR >= 1993]$EVTYPE)), "categories"))
+```
+To analyse impact of the individaual classes of events I decided to use two metrics:
+
+population impact - sum of the number of injured and killed
+economic impact - sum of amount of crops damage and property damage
+Since we have no detailed knowledge about long-term effects of events this approach seems to be justified.
+
+```{r}
+dt.agg.by.year.and.evtype.gte.1993 <- dt[YEAR >= 1993,
+    list(
+        n_events=sum(COUNT),
+
+        total_population_impact=sum(FATALITIES + INJURIES, na.rm=TRUE),
+        avg_population_impact=mean(FATALITIES + INJURIES, na.rm=TRUE),
+        median_population_impact=median(FATALITIES + INJURIES, na.rm=TRUE),
+        sd_population_impact=sd(FATALITIES + INJURIES, na.rm=TRUE),
+        max_population_impact=max(FATALITIES + INJURIES, na.rm=TRUE),
+
+        avg_economic_impact=mean(PROPDMG.TOTAL + CROPDMG.TOTAL, na.rm=TRUE),
+        median_economic_impact=median(PROPDMG.TOTAL + CROPDMG.TOTAL, na.rm=TRUE),
+        sd_economic_impact=sd(PROPDMG.TOTAL + CROPDMG.TOTAL, na.rm=TRUE),
+        max_economic_impact=sd(PROPDMG.TOTAL + CROPDMG.TOTAL, na.rm=TRUE),
+        total_economic_impact=sum(PROPDMG.TOTAL + CROPDMG.TOTAL, na.rm=TRUE)
+
+    ),
+    by=list(EVTYPE)
+]
+
+```
+
+
+Majority of events recorded between 1993 and 2011 had only marginal impact on the population and property. For the most common classes of events both means and meadians are low or close to 0 as shown below.
+
+```{r}
+grid.arrange(
+    tableGrob(dt.agg.by.year.and.evtype.gte.1993[
+        order(-n_events),
+        list(
+            Event=EVTYPE,
+            N=n_events,
+            Total=total_population_impact,
+            Mean=avg_population_impact,
+            Median=median_population_impact,
+            SD=sd_population_impact,
+            Max=max_population_impact
+        )
+    ]),
+    sub = textGrob("Table 1. Population impact statistics 1993-2011", gp = gpar(font = 0.7))
+)
+
+grid.arrange(    
+    tableGrob(dt.agg.by.year.and.evtype.gte.1993[
+        order(-n_events),
+        list(
+            Event=EVTYPE,
+            N=n_events,
+            Total=total_economic_impact,
+            Mean=avg_economic_impact,
+            Median=median_economic_impact,
+            SD=sd_economic_impact,
+            Max=max_economic_impact
+        )
+    ]),
+    sub = textGrob("Table 2. Economic impact statistics 1993-2011", gp = gpar(font = 0.7))
+
+)
+
+```
+
+Since distribution of the number of events by class is highly skewed and measures of centrality can be in our case somewhat misleading I decided to use maximum value as a statistic describing general severity of the group. While this approach can be disputed I think it is justified by the fact that most of the time we try avoid worst case scenario.
+
+Finally data has been splitted into four categories:
+
+Low impact,
+High population, low economic impact
+Low population, high economic impact
+High population, high economic impact
+Population impact equal to 50 and economic impact equal to 10 million USD have been used as the spliting lines. This values are arbitrary and where adjusted to fit logscale distribution of the data.
+
+As a auxiliary metric sum of the normalized averages will be used.
+
+```{r }
+attach(dt.agg.by.year.and.evtype.gte.1993)
+dt.agg.by.year.and.evtype.gte.1993$group <- factor(ifelse(max_economic_impact < 
+    10 & max_population_impact < 50, 1, ifelse(max_economic_impact < 10 & max_population_impact >= 
+    50, 2, ifelse(max_economic_impact >= 10 & max_population_impact < 50, 3, 
+    4))), labels = c("Low impact", "High population, low economic impact", "Low population, high economic impact", 
+    "High population, high economic impact"))
+
+detach(dt.agg.by.year.and.evtype.gte.1993)
+dt.agg.by.year.and.evtype.gte.1993$EVTYPE <- factor(dt.agg.by.year.and.evtype.gte.1993$EVTYPE)
+dt.agg.by.year.and.evtype.gte.1993$Normalized.average.impact <- scale(dt.agg.by.year.and.evtype.gte.1993$avg_economic_impact) + 
+    scale(dt.agg.by.year.and.evtype.gte.1993$avg_population_impact)
+```
+
+###Results
+Most of the observed differences can be attributed to the differences in the size of the samples. Nevertheless I was able to identift four types of events which had both high normalized average and maximum impact and should be considered highly harmful. These are the following:
+
+Surge
+Heat / Heat Wave
+Tropical storm
+Tsunami
+Remaining types of events should especially those assigned to non low-impact groups.
+
+```{r}
+
+
+plot.high.impact.events <- ggplot(dt.agg.by.year.and.evtype.gte.1993, aes(x = max_population_impact, 
+    y = max_economic_impact, label = EVTYPE, colour = group))
+plot.high.impact.events <- plot.high.impact.events + geom_text(hjust = -0.1, 
+    vjust = -0.1, size = 3, alpha = 0.7)
+plot.high.impact.events <- plot.high.impact.events + geom_point(aes(size = Normalized.average.impact), 
+    shape = 21) + theme_bw()
+plot.high.impact.events <- plot.high.impact.events + labs(title = "Categories of the severe weather events\n U.S. 2003-2011", 
+    y = "Economic impact (million USD)", x = "Population impact (number of injured and killed)") + 
+    scale_x_log10(expand = c(0.7, 0)) + scale_y_log10()
+plot.high.impact.events <- plot.high.impact.events + scale_color_manual(values = c("#66c2a5", 
+    "#fdae61", "#4393c3", "#d53e4f"))
+
+grid.arrange(plot.high.impact.events, sub = textGrob("Figure 2. Categories of the severe weather events. \n Variables had been plotted  using a logarithmic scale. Size of the points is proportional to the logarithm of the number of recorded events", 
+    gp = gpar(font = 0.7)))
+
+```
