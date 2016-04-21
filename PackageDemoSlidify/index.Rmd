@@ -1,0 +1,51 @@
+---
+title       : Demonstration for an R Package
+subtitle    : 
+author      : Lakshmanan Arasakumar
+job         : 
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      # 
+widgets     : []            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+---
+
+## Project
+
+1. Write a shiny application and deploy it in shinyapps.io
+2. Create a Supporting documentation which tells the user how to use the 
+application
+
+--- .class #id 
+
+## Demonstration App
+
+* Quantmod is a package to work with stock market information in an easy to use way.
+* It also has a number of options that drive what analysis occurs when looking at certain stock information.
+* This application will demonstrate some of the functionalities of Quantmod package.
+
+--- .class #id
+
+## Sample Code for the package
+
+```{r sample code, echo=TRUE, message=FALSE, warning=FALSE, results='markup'}
+library(quantmod)
+getSymbols("^DJI", from=Sys.Date()-90, to=Sys.Date())
+chartSeries(DJI, theme=chartTheme("beige"))
+```
+
+--- .class #id
+
+## Application Functionalities
+
+The application has the following functionalities
+
+1. Enter whatever stock you want to analyze.
+2. Choose the date range to do the analysis.
+3. Use the available analysis options for the graph
+
+Application url is provided below.
+https://karthikkicks.shinyapps.io/PackageDemo/
+
+---
